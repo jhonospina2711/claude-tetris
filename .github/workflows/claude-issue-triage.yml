@@ -1,0 +1,141 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: claude-issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # No triagear issues creados/editados por bots, y no duplicar trabajo con
+    # claude.yml (que ya responde cuando el issue menciona @claude).
+    if: |
+      github.event.issue.user.type != 'Bot' &&
+      !contains(github.event.issue.title, '@claude') &&
+      !contains(github.event.issue.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Asegurar labels del proyecto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "area:gameplay" --color 1D76DB --description "Lógica de piezas, colisión, rotación, bloqueo" --force
+          gh label create "area:rendering" --color 1D76DB --description "Canvas, draw(), drawNext(), ghost piece" --force
+          gh label create "area:input" --color 1D76DB --description "Listener de keydown, controles, pausa" --force
+          gh label create "area:ui" --color 1D76DB --description "index.html, style.css, HUD" --force
+          gh label create "area:scoring" --color 1D76DB --description "Puntuación, líneas, niveles, dropInterval" --force
+          gh label create "priority:high" --color B60205 --description "Rompe el juego o bloquea trabajo" --force
+          gh label create "priority:medium" --color FBCA04 --description "Importante pero no bloqueante" --force
+          gh label create "priority:low" --color 0E8A16 --description "Mejora menor o cosmética" --force
+          gh label create "needs-info" --color D876E3 --description "Falta información para diagnosticar" --force
+          gh label create "ready-to-implement" --color 0E8A16 --description "Diagnóstico completo, listo para codificar" --force
+
+      - name: Triage con Claude
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            ISSUE NUMBER: ${{ github.event.issue.number }}
+            TITLE: ${{ github.event.issue.title }}
+            BODY:
+            ${{ github.event.issue.body }}
+            AUTHOR: ${{ github.event.issue.user.login }}
+
+            Eres el encargado de triage de issues de este repositorio (un juego de
+            Tetris en JavaScript vanilla: game.js, index.html, style.css). Responde
+            siempre en español.
+
+            Antes de opinar:
+            1. Lee CLAUDE.md y game.js para entender la arquitectura real
+               (tablero, piezas, colisión/wall kicks, bucle de juego, ciclo de
+               pieza, renderizado, puntuación/niveles, input).
+            2. Usa `gh issue view ${{ github.event.issue.number }}` para ver el
+               issue completo y `gh search issues` para detectar posibles
+               duplicados en este repositorio.
+
+            Clasificación y labels:
+            - Elige labels SOLO de esta lista cerrada (ya existen en el repo):
+              - Tipo: bug, enhancement, question, documentation, duplicate,
+                invalid, wontfix, good first issue, help wanted
+              - Área (una o varias): area:gameplay, area:rendering, area:input,
+                area:ui, area:scoring
+              - Prioridad (exactamente una): priority:high, priority:medium,
+                priority:low
+              - Estado: needs-info (si falta información para diagnosticar) o
+                ready-to-implement (si el diagnóstico queda firme y accionable)
+            - Si detectas que es un duplicado, añade la label "duplicate" y
+              menciona el número del issue original en el diagnóstico.
+            - Aplica las labels elegidas con:
+              `gh issue edit ${{ github.event.issue.number }} --add-label "label1" --add-label "label2" ...`
+              (quita antes las labels de área/prioridad/estado que ya no
+              apliquen si este es un re-análisis tras una edición, usando
+              --remove-label).
+
+            Diagnóstico técnico:
+            - Escribe el diagnóstico en el archivo /tmp/diagnostico.md con
+              EXACTAMENTE esta estructura (Markdown):
+
+              <!-- claude-issue-triage -->
+              ## Diagnóstico automático
+
+              **Tipo:** ... · **Prioridad:** ... · **Área:** ...
+
+              ### Resumen
+              (2-4 frases resumiendo el problema o la solicitud)
+
+              ### Dónde vive el problema
+              (lista de funciones/archivos reales implicados, p.ej.
+              `game.js` — `tryRotate()` / tabla `kicks`)
+
+              ### Enfoque sugerido
+              (pasos concretos para abordarlo, citando funciones existentes
+              a reutilizar según CLAUDE.md: collide(), tryRotate(), ghostY(),
+              lockPiece(), clearLines(), spawn(), loop(), draw(), drawNext(),
+              rotateCW(), hardDrop(), softDrop())
+
+              ### Criterios de aceptación
+              (checklist verificable)
+
+              ### Riesgos / preguntas abiertas
+              (incluye advertencias relevantes, p.ej. que cambiar COLS/ROWS/BLOCK
+              en game.js obliga a ajustar width/height del <canvas id="board">
+              en index.html)
+
+            - Si NO tienes información suficiente para diagnosticar con
+              confianza, no inventes causas: usa la label needs-info y en la
+              sección "Riesgos / preguntas abiertas" lista las preguntas
+              concretas que necesitas que el autor responda; deja "Enfoque
+              sugerido" y "Criterios de aceptación" breves o pendientes de esa
+              respuesta.
+            - Cita solo funciones y archivos que existan de verdad en el
+              repositorio (verificado en el paso 1); no inventes nombres.
+
+            Publicar el diagnóstico:
+            - Si este workflow ya había comentado antes en este issue
+              (búscalo con `gh issue view ${{ github.event.issue.number }} --json comments`
+              y localiza el comentario que empieza con
+              `<!-- claude-issue-triage -->`), actualízalo así:
+              `gh issue comment ${{ github.event.issue.number }} --body-file /tmp/diagnostico.md --edit-last`
+            - Si no existe un comentario previo tuyo, créalo con:
+              `gh issue comment ${{ github.event.issue.number }} --body-file /tmp/diagnostico.md`
+            - Nunca crees un segundo comentario de diagnóstico: el issue debe
+              tener como máximo uno.
+          claude_args: |
+            --allowedTools "Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*),Bash(gh search issues:*)"
+            --max-turns 20
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
