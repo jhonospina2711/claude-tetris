@@ -86,8 +86,10 @@ jobs:
               --remove-label).
 
             Diagnóstico técnico:
-            - Escribe el diagnóstico en el archivo /tmp/diagnostico.md con
-              EXACTAMENTE esta estructura (Markdown):
+            - Escribe el diagnóstico en el archivo /tmp/diagnostico.md en
+              formato Markdown válido y compatible con el renderizado de
+              GitHub (encabezados, listas, checklists `- [ ]` y bloques de
+              código con backticks), siguiendo EXACTAMENTE esta estructura:
 
               <!-- claude-issue-triage -->
               ## Diagnóstico automático
